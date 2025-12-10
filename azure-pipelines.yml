@@ -2,7 +2,7 @@ trigger:
 - main # ou sua branch principal
 
 pool:
-  vmImage: 'ubuntu-latest' # Ambiente Linux para Python
+  name: 'Agent pool SBR' 
 
 steps:
 - task: UsePythonVersion@0
