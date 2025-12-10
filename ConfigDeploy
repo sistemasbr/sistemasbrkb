@@ -1,0 +1,61 @@
+# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  pythonVersion: '3.11'                   # ajuste se quiser outra versão suportada
+  azureSubscription: 'NomeDaSuaConexao'   # nome da Service connection criada no Azure DevOps
+  appName: 'sistemasbrkb'                 # nome do Azure Web App
+  artifactStaging: '$(Build.ArtifactStagingDirectory)'
+  packagePath: '$(artifactStaging)/webapp.zip'
+  djangoSettings: 'meu_projeto.settings'  # altere para seu settings module (ex: mysite.settings)
+  startupCommand: 'gunicorn meu_projeto.wsgi:application --bind=0.0.0.0:8000'
+
+steps:
+- checkout: self
+  clean: true
+
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '$(pythonVersion)'
+
+- script: |
+    python -m venv .venv
+    source .venv/bin/activate
+    python -m pip install --upgrade pip
+    pip install -r requirements.txt
+  displayName: 'Install dependencies'
+
+- script: |
+    source .venv/bin/activate
+    export DJANGO_SETTINGS_MODULE=$(djangoSettings)
+    python manage.py migrate --noinput
+    python manage.py collectstatic --noinput
+  displayName: 'Migrate & Collectstatic'
+  env:
+    DJANGO_SETTINGS_MODULE: $(djangoSettings)
+
+# Package app (zip)
+- script: |
+    mkdir -p $(artifactStaging)
+    # Exclua pastas desnecessárias
+    zip -r $(packagePath) . -x ".venv/*" -x ".git/*" -x "node_modules/*" -x "*.pyc"
+  displayName: 'Package app to zip'
+
+- publish: $(artifactStaging)
+  artifact: drop
+
+# Deploy to Azure Web App
+- task: AzureWebApp@1
+  inputs:
+    azureSubscription: '$(azureSubscription)'   # nome da service connection
+    appName: '$(appName)'
+    package: '$(packagePath)'
+    runtimeStack: 'PYTHON|3.11'                 # opcional, ajuda a configurar o App Service
+    startupCommand: '$(startupCommand)'        # use se for App Service on Linux
+  displayName: 'Deploy to Azure Web App'
