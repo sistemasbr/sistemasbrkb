@@ -6,3 +6,5 @@ django-jazzmin
 openpyxl
 beautifulsoup4
 whitenoise
+psycopg2-binary>=2.9
+
