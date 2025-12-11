@@ -1,0 +1,166 @@
+# Guia para Implantação de Aplicação Django no Azure Web App
+
+Este guia fornece os passos essenciais para implantar sua aplicação Django em um Serviço de Aplicativo do Azure (Azure App Service).
+
+## Pré-requisitos
+
+1.  **Conta do Azure:** Você precisa de uma assinatura ativa do Azure.
+2.  **Azure CLI:** Instale a Interface de Linha de Comando do Azure. [https://docs.microsoft.com/cli/azure/install-azure-cli](https://docs.microsoft.com/cli/azure/install-azure-cli)
+3.  **Git:** Tenha o Git instalado na sua máquina local.
+4.  **Projeto Django:** Seu projeto deve estar em um repositório Git local.
+
+---
+
+## Passo 1: Preparar sua Aplicação Django
+
+1.  **Atualizar `requirements.txt`:**
+    Certifique-se de que seu arquivo `requirements.txt` contém todas as dependências, incluindo um servidor WSGI como o Gunicorn.
+
+    ```
+    # requirements.txt
+    django
+    gunicorn
+    psycopg2-binary  # Se estiver usando PostgreSQL
+    python-dotenv    # Para gerenciar variáveis de ambiente localmente
+    ... outras dependências
+    ```
+
+2.  **Configurar `settings.py` para Produção:**
+    Modifique seu `settings.py` para ler configurações sensíveis (como `SECRET_KEY` e dados do banco) a partir de variáveis de ambiente. O Azure irá fornecer esses valores.
+
+    ```python
+    # core/settings.py
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv() # Carrega variáveis de ambiente de um arquivo .env localmente
+
+    SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'sua-chave-secreta-de-desenvolvimento')
+
+    # Em produção, o DEBUG deve ser False
+    DEBUG = os.environ.get('DJANGO_DEBUG', '') != 'False'
+
+    # Configure o nome do seu site Azure
+    ALLOWED_HOSTS = ['seu-nome-de-app.azurewebsites.net', '127.0.0.1']
+
+    # Exemplo para banco de dados PostgreSQL
+    DATABASE_URL = os.environ.get('DATABASE_URL')
+    if DATABASE_URL:
+        DATABASES = {
+            'default': dj_database_url.parse(DATABASE_URL)
+        }
+    else:
+        # Sua configuração de banco de dados local (SQLite, etc.)
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
+    ```
+
+---
+
+## Passo 2: Criar os Recursos no Azure via CLI
+
+1.  **Login no Azure:**
+    Abra seu terminal e execute:
+    ```bash
+    az login
+    ```
+
+2.  **Definir Variáveis (Opcional, mas recomendado):**
+    ```bash
+    NOME_GRUPO_RECURSOS="meu-grupo-recursos-kb"
+    NOME_PLANO_SERVICO="meu-plano-servico-kb"
+    NOME_APP="sistemasbr-kb-app" # !! IMPORTANTE: Escolha um nome único globalmente
+    REGIAO="eastus" # Escolha a região mais próxima de você
+    ```
+
+3.  **Criar um Grupo de Recursos:**
+    ```bash
+    az group create --name $NOME_GRUPO_RECURSOS --location $REGIAO
+    ```
+
+4.  **Criar um Plano de Serviço de Aplicativo:**
+    (F1 é o tier gratuito)
+    ```bash
+    az appservice plan create --name $NOME_PLANO_SERVICO --resource-group $NOME_GRUPO_RECURSOS --sku F1 --is-linux
+    ```
+
+5.  **Criar a Aplicação Web (Web App):**
+    Especifique a versão do Python que seu projeto usa.
+    ```bash
+    az webapp create --resource-group $NOME_GRUPO_RECURSOS --plan $NOME_PLANO_SERVICO --name $NOME_APP --runtime "PYTHON|3.9" --deployment-local-git
+    ```
+    Copie a URL do Git que aparece no resultado (algo como `https://<user>@<app-name>.scm.azurewebsites.net/<app-name>.git`).
+
+---
+
+## Passo 3: Configurar o Web App no Azure
+
+1.  **Comando de Inicialização (Startup Command):**
+    O Azure precisa saber como iniciar sua aplicação com o Gunicorn. O comando deve apontar para o seu arquivo `wsgi.py`.
+    ```bash
+    az webapp config set --resource-group $NOME_GRUPO_RECURSOS --name $NOME_APP --startup-file "gunicorn --bind=0.0.0.0 --timeout 600 core.wsgi"
+    ```
+    *Substitua `core.wsgi` se seu arquivo wsgi estiver em outro lugar.*
+
+2.  **Configurar Variáveis de Ambiente:**
+    Defina as variáveis que seu `settings.py` espera.
+    ```bash
+    az webapp config appsettings set --resource-group $NOME_GRUPO_RECURSOS --name $NOME_APP --settings DJANGO_SETTINGS_MODULE="core.settings" DJANGO_SECRET_KEY="sua-chave-secreta-muito-segura-e-longa" DJANGO_DEBUG="False"
+    ```
+    *Se você estiver usando um banco de dados externo, configure a `DATABASE_URL` aqui também.*
+
+---
+
+## Passo 4: Fazer o Deploy do Código
+
+1.  **Adicionar o Repositório Remoto do Azure:**
+    Use a URL do Git que você copiou anteriormente.
+    ```bash
+    git remote add azure <URL_DO_GIT_DO_AZURE>
+    ```
+
+2.  **Enviar o Código para o Azure:**
+    Isso irá enviar seu código. O Azure irá detectar o `requirements.txt` e instalar as dependências automaticamente.
+    ```bash
+    git push azure main # ou master, dependendo da sua branch principal
+    ```
+
+---
+
+## Passo 5: Pós-Deploy (Migrações e Arquivos Estáticos)
+
+1.  **Acessar o Web App via SSH:**
+    O Azure permite que você acesse um terminal SSH diretamente no contêiner da sua aplicação.
+    ```bash
+    az webapp ssh --resource-group $NOME_GRUPO_RECURSOS --name $NOME_APP
+    ```
+
+2.  **Executar Comandos do Django:**
+    Dentro da sessão SSH, execute os comandos de migração e coleta de arquivos estáticos.
+    ```bash
+    # Ativar o ambiente virtual (o Azure cria um automaticamente)
+    source /antenv/bin/activate
+
+    # Executar migrações do banco de dados
+    python manage.py migrate
+
+    # Coletar arquivos estáticos
+    python manage.py collectstatic --noinput
+    ```
+
+---
+
+## Passo 6: Acessar seu Site
+
+Sua aplicação estará disponível em `http://<NOME_APP>.azurewebsites.net`.
+
+### Visualizando Logs
+
+Se algo der errado, você pode ver os logs em tempo real com o comando:
+```bash
+az webapp log tail --resource-group $NOME_GRUPO_RECURSOS --name $NOME_APP
+```
