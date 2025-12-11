@@ -1,0 +1,254 @@
+# Tutorial Completo: Como Implantar um Projeto Django no Azure
+
+Este guia detalha os passos para configurar e implantar seu projeto Django utilizando os serviços Azure App Service, Azure Database for PostgreSQL e Azure Blob Storage.
+
+---
+
+### Visão Geral dos Serviços do Azure
+
+1.  **Azure App Service**: O serviço principal para hospedar aplicações web (PaaS). Ele gerencia o servidor, SO e ambiente de execução (Python), permitindo que você se concentre apenas no seu código.
+2.  **Azure Database for PostgreSQL**: Um serviço de banco de dados PostgreSQL gerenciado, ideal para produção com Django.
+3.  **Azure Blob Storage**: Para armazenar e servir arquivos estáticos (CSS, JS) e de mídia (uploads de usuários) de forma eficiente.
+
+---
+
+### Tutorial Passo a Passo
+
+#### Passo 1: Pré-requisitos
+
+Antes de começar, garanta que você tem:
+1.  Uma conta ativa do Azure.
+2.  O [Azure CLI](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli) instalado em sua máquina.
+3.  Seu código de projeto Django pronto.
+
+Faça login na sua conta do Azure pelo terminal:
+```bash
+az login
+```
+
+#### Passo 2: Criar o Banco de Dados (Azure Database for PostgreSQL)
+
+Primeiro, crie um grupo de recursos para organizar todos os seus serviços.
+
+```bash
+az group create --name "SistemasBr-KB-Producao" --location "Brazil South"
+```
+
+Agora, crie o servidor PostgreSQL. Substitua `<seu_usuario_admin>` e `<sua_senha_segura>` por suas credenciais.
+
+```bash
+az postgres flexible-server create \
+  --name "sistemasbr-kb-postgres" \
+  --resource-group "SistemasBr-KB-Producao" \
+  --location "Brazil South" \
+  --sku-name "B_Standard_B1ms" \
+  --admin-user "<seu_usuario_admin>" \
+  --admin-password "<sua_senha_segura>" \
+  --public-access "0.0.0.0" # Permite acesso de qualquer serviço Azure
+```
+**Anote as credenciais e o nome do host** do banco de dados (ex: `sistemasbr-kb-postgres.postgres.database.azure.com`). Você precisará delas mais tarde.
+
+**Importante para Conexão Local:** Se você quiser que seu ambiente de desenvolvimento local se conecte a este DB, precisará adicionar seu IP público ao firewall do Azure.
+```bash
+# 1. Descubra seu IP público (ex: ifconfig.me)
+SEU_IP="XXX.XXX.XXX.XXX"
+
+# 2. Adicione a regra de firewall (certifique-se de que o Azure CLI está instalado e configurado)
+az postgres flexible-server firewall-rule create ^\
+  --resource-group "SistemasBr-KB-Producao" ^\
+  --name "sistemasbr-kb-postgres" ^\
+  --rule-name "AllowMyLocalIP" ^\
+  --start-ip-address "%SEU_IP%" ^\
+  --end-ip-address "%SEU_IP%"
+```
+
+#### Passo 3: Criar a Conta de Armazenamento (Azure Blob Storage)
+
+Esta conta armazenará seus arquivos estáticos e de mídia. O nome da conta deve ser único globalmente.
+
+```bash
+# Crie um nome único para sua conta de armazenamento (a variável $RANDOM adiciona um número aleatório)
+STORAGE_ACCOUNT_NAME="sistemasbrkbstorage$RANDOM"
+
+az storage account create \
+  --name $STORAGE_ACCOUNT_NAME \
+  --resource-group "SistemasBr-KB-Producao" \
+  --location "Brazil South" \
+  --sku "Standard_LRS" \
+  --kind "StorageV2"
+
+# Crie os contêineres para arquivos estáticos e de mídia
+az storage container create --name "static" --account-name $STORAGE_ACCOUNT_NAME
+az storage container create --name "media" --account-name $STORAGE_ACCOUNT_NAME
+```
+
+Obtenha a connection string para configurar o Django:
+```bash
+az storage account show-connection-string --name $STORAGE_ACCOUNT_NAME --resource-group "SistemasBr-KB-Producao" -o tsv
+```
+**Copie e guarde essa connection string.**
+
+#### Passo 4: Configurar o Projeto Django para Produção
+
+1.  **Atualize seu `requirements.txt`**:
+    ```
+    Django>=3.0
+    gunicorn
+    psycopg2-binary
+    django-storages[azure]
+    python-dotenv
+    ```
+    Instale-os localmente para garantir que tudo funciona: `pip install -r requirements.txt`
+
+2.  **Ajuste seu `core/settings.py`**:
+    Use variáveis de ambiente para não expor suas senhas e chaves no código.
+
+    ```python
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv() # Carrega variáveis de um arquivo .env para desenvolvimento local
+
+    # ---
+    # Configurações Básicas
+    # ---
+    SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'sua-chave-secreta-local-e-segura')
+    DEBUG = os.getenv('DEBUG', 'False') == 'True'
+    ALLOWED_HOSTS = os.getenv('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+
+    # ---
+    # Configuração do Banco de Dados para Produção (PostgreSQL)
+    # ---
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('DB_NAME'),
+            'USER': os.getenv('DB_USER'),
+            'PASSWORD': os.getenv('DB_PASSWORD'),
+            'HOST': os.getenv('DB_HOST'),
+            'PORT': os.getenv('DB_PORT', '5432'),
+        }
+    }
+
+    # ---
+    # Configuração de Arquivos Estáticos e de Mídia (Azure Blob Storage)
+    # ---
+    AZURE_CONNECTION_STRING = os.getenv('AZURE_CONNECTION_STRING')
+    
+    if AZURE_CONNECTION_STRING:
+        DEFAULT_FILE_STORAGE = 'storages.backends.azure_storage.AzureStorage'
+        STATICFILES_STORAGE = 'storages.backends.azure_storage.AzureStorage'
+        
+        AZURE_ACCOUNT_NAME = os.getenv('AZURE_ACCOUNT_NAME')
+        AZURE_CONTAINER = 'static'
+        AZURE_MEDIA_CONTAINER = 'media'
+
+        STATIC_URL = f'https://{AZURE_ACCOUNT_NAME}.blob.core.windows.net/static/'
+        MEDIA_URL = f'https://{AZURE_ACCOUNT_NAME}.blob.core.windows.net/{AZURE_MEDIA_CONTAINER}/'
+        
+        AZURE_STORAGE_CONNECTION_STRING = AZURE_CONNECTION_STRING
+    else:
+        # Configurações para desenvolvimento local (se não estiver usando Azure Blob Storage)
+        STATIC_URL = '/static/'
+        STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles') # Exemplo, defina BASE_DIR
+        MEDIA_URL = '/media/'
+        MEDIA_ROOT = os.path.join(BASE_DIR, 'media') # Exemplo, defina BASE_DIR
+    ```
+    *   **Observação:** Certifique-se de que `BASE_DIR` esteja definido corretamente no seu `settings.py` (geralmente ele já vem configurado).
+
+3.  **Crie ou atualize seu arquivo `.env` local** (na raiz do projeto) para desenvolvimento, se você quiser conectar localmente ao Azure DB:
+    ```ini
+    # Arquivo: .env
+    DJANGO_SECRET_KEY=sua-chave-secreta-aleatoria-para-desenvolvimento
+    DEBUG=True
+    DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+
+    # ---
+    # Configuração do Banco de Dados do Azure
+    # ---
+    DB_NAME=postgres
+    DB_USER=<seu_usuario_admin>
+    DB_PASSWORD=<sua_senha_segura_do_postgres>
+    DB_HOST=sistemasbr-kb-postgres.postgres.database.azure.com
+    DB_PORT=5432
+
+    # ---
+    # Configuração do Blob Storage do Azure (opcional para local)
+    # ---
+    # AZURE_ACCOUNT_NAME=<seu_nome_de_conta_storage>
+    # AZURE_CONNECTION_STRING=<sua_connection_string_do_storage>
+    ```
+
+#### Passo 5: Criar o App Service e Fazer o Deploy
+
+O Azure CLI pode criar o App Service e fazer o deploy do seu código de uma vez.
+
+```bash
+# Crie um nome único para seu aplicativo
+APP_NAME="sistemasbr-kb-webapp-$RANDOM"
+
+az webapp up \
+  --name $APP_NAME \
+  --resource-group "SistemasBr-KB-Producao" \
+  --location "Brazil South" \
+  --sku "B1" \
+  --runtime "PYTHON:3.9" # Ou a versão Python que seu projeto usa
+```
+
+#### Passo 6: Configurar o Ambiente no App Service
+
+Passe as variáveis de ambiente (senhas, chaves, etc.) para o App Service.
+
+```bash
+az webapp config appsettings set --resource-group "SistemasBr-KB-Producao" --name $APP_NAME --settings \
+  "DJANGO_SECRET_KEY=$(openssl rand -hex 32)" \
+  "DEBUG=False" \
+  "DJANGO_ALLOWED_HOSTS=$APP_NAME.azurewebsites.net,localhost" \
+  "DB_NAME=postgres" \
+  "DB_USER=<seu_usuario_admin>" \
+  "DB_PASSWORD=<sua_senha_segura_do_postgres>" \
+  "DB_HOST=sistemasbr-kb-postgres.postgres.database.azure.com" \
+  "AZURE_ACCOUNT_NAME=$STORAGE_ACCOUNT_NAME" \
+  "AZURE_CONNECTION_STRING=<sua_connection_string_do_storage>"
+```
+
+**Comando de Inicialização (Startup Command)**
+
+O App Service precisa saber como iniciar seu aplicativo com o Gunicorn.
+
+```bash
+az webapp config set --resource-group "SistemasBr-KB-Producao" --name $APP_NAME \
+  --startup-command "gunicorn --bind=0.0.0.0 --workers=4 core.wsgi"
+```
+
+#### Passo 7: Rodar Migrações e Coletar Arquivos Estáticos
+
+Após o deploy, você precisa acessar o ambiente do App Service para rodar os comandos do Django.
+
+1.  Abra uma sessão SSH para o seu App Service:
+    ```bash
+    az webapp ssh --resource-group "SistemasBr-KB-Producao" --name $APP_NAME
+    ```
+
+2.  Dentro da sessão SSH, execute os seguintes comandos:
+    ```bash
+    # Ativar o ambiente virtual do App Service
+    source /antenv/bin/activate
+    
+    # Rodar as migrações do banco de dados
+    python manage.py migrate
+    
+    # Coletar e enviar os arquivos estáticos para o Blob Storage
+    python manage.py collectstatic --noinput
+    ```
+
+#### Passo 8: Acessar seu Aplicativo e Monitorar
+
+Seu site estará disponível em `https://<seu_app_name>.azurewebsites.net`.
+
+Para monitorar os logs em tempo real e depurar possíveis problemas:
+```bash
+az webapp log tail --resource-group "SistemasBr-KB-Producao" --name $APP_NAME
+```
+---
+Espero que este tutorial completo "mostre como funciona" a implantação do seu projeto Django no Azure

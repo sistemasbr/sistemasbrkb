@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% load kb_custom_filters %}
+
+{% block title %}Novidades - {{ block.super }}{% endblock %}
+
+{% block content %}
+    <h2 class="search-results-title">Novidades</h2>
+    <p><a href="{% url 'kb:home' %}" class="btn btn-secondary">&larr; Voltar para a página inicial</a></p>
+
+    {% if artigos %}
+        <ul class="article-list">
+            {% for artigo in artigos %}
+                <li>
+                    <a href="{{ artigo.get_absolute_url }}">{{ forloop.counter }} - {{ artigo.titulo }}
+                    {% if artigo.show_new_in_title %}
+                        <span class="new-tag">NOVO</span>
+                    {% endif %}
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>Nenhuma novidade encontrada no momento.</p>
+    {% endif %}
+{% endblock %}

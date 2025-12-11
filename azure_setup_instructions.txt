@@ -1,0 +1,37 @@
+# Este arquivo contém instruções para configurar seu ambiente local e Azure.
+
+### Conteúdo do arquivo .env (crie um arquivo chamado `.env` na raiz do seu projeto)
+
+# Configurações do Django
+DJANGO_SECRET_KEY=sua-chave-secreta-aleatoria-para-desenvolvimento
+DEBUG=True
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1
+
+# --- Conexão com o Banco de Dados do Azure ---
+# Preencha com as credenciais do seu servidor PostgreSQL no Azure
+DB_NAME=postgres
+DB_USER=<seu_usuario_admin>
+DB_PASSWORD=<sua_senha_segura>
+DB_HOST=sistemasbr-kb-postgres.postgres.database.azure.com
+DB_PORT=5432
+
+
+### Instruções para adicionar regra de Firewall no Azure
+
+# 1. Descubra seu endereço IP público atual.
+#    Você pode pesquisar "what is my ip" no Google ou usar um site como https://ifconfig.me/
+
+# 2. Substitua SEU_IP pelo seu endereço IP público e execute o comando abaixo no Azure CLI.
+
+# Defina seu IP público
+# Exemplo: SEU_IP="192.168.1.100" (substitua pelo seu IP real)
+SEU_IP="XXX.XXX.XXX.XXX"
+
+# Adicione a regra de firewall ao seu servidor PostgreSQL
+# (certifique-se de que o nome do resource group e do servidor estejam corretos)
+az postgres flexible-server firewall-rule create ^
+  --resource-group "SistemasBr-KB-Producao" ^
+  --name "sistemasbr-kb-postgres" ^
+  --rule-name "AllowMyLocalIP" ^
+  --start-ip-address "%SEU_IP%" ^
+  --end-ip-address "%SEU_IP%"
